@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Bulk WhatsApp Sender</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Bulk WhatsApp Sender</h1>
+        <form id="sendForm" enctype="multipart/form-data">
+            <label>Phone Numbers (CSV format or upload Excel):</label>
+            <textarea name="phone_numbers_csv" id="phone_numbers_csv" placeholder="1234567890,9876543210,..."></textarea><br>
+            <input type="file" name="excel_file" id="excel_file"><br>
+            <small>If Excel file is uploaded, it will override CSV above.</small><br>
+
+            <label>Message Title:</label>
+            <input type="text" name="message_title" required><br>
+
+            <label>Message Body:</label>
+            <textarea name="message_body" required></textarea><br>
+
+            <label>Google Drive Image Link:</label>
+            <input type="text" name="google_drive_link"><br>
+
+            <label>History Title:</label>
+            <input type="text" name="history_title" required><br>
+
+            <button type="submit">Send</button>
+        </form>
+
+        <h2>Status</h2>
+        <div id="status"></div>
+
+        <h2>History</h2>
+        <div class="table-container">
+            <table id="historyTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>History Title</th>
+                        <th>Message Title</th>
+                        <th>Message Body</th>
+                        <th>Image Link</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="historyTableBody">
+                    {% for record in history %}
+                    <tr data-id="{{ record.id }}">
+                        <td>{{ record.id }}</td>
+                        <td>{{ record.history_title }}</td>
+                        <td>{{ record.message_title }}</td>
+                        <td class="message-body">{{ record.message_body[:100] }}{% if record.message_body|length > 100 %}...{% endif %}</td>
+                        <td>
+                            {% if record.google_drive_link %}
+                            <a href="{{ record.google_drive_link }}" target="_blank" class="view-link">View</a>
+                            {% else %}
+                            <span class="no-image">No Image</span>
+                            {% endif %}
+                        </td>
+                        <td class="actions-cell">
+                            <button type="button" class="refillBtn action-btn" data-id="{{ record.id }}" title="Refill Form">📝</button>
+                            <button type="button" class="downloadBtn action-btn" data-id="{{ record.id }}" title="Download Report">📊</button>
+                            <button type="button" class="deleteBtn action-btn delete" data-id="{{ record.id }}" title="Delete Record">🗑️</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="pagination">
+            <button id="prevPage">Previous</button>
+            <span id="pageInfo">Page 1</span>
+            <button id="nextPage">Next</button>
+        </div>
+
+        <!-- Loading indicator for report generation -->
+        <div id="loadingModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="loading-spinner"></div>
+                <p>Generating report... Please wait.</p>
+            </div>
+        </div>
+    </div>
+<script src="/static/script.js"></script>
+</body>
+</html>
