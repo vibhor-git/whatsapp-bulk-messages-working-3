@@ -9,20 +9,26 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.units import inch
 from datetime import datetime
 
-app = Flask(__name__)
-app.secret_key = "supersecretkey"
+# --- Configuration loaded from Environment Variables (Production Best Practice) ---
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "926600003859644")
+WEBHOOK_VERIFY_TOKEN = os.environ.get("WEBHOOK_VERIFY_TOKEN", "my_webhook_secret_123")
+FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "51e12e6bc2f8fd058fdccd7a83664794")
+DATABASE_URL = os.environ.get("DATABASE_URL", "mysql+pymysql://root:vibhor1234@localhost/whatsappdb")
 
-# --- your DB connection (unchanged) ---
-app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+pymysql://root:vibhor1234@localhost/whatsappdb"
+app = Flask(__name__)
+app.secret_key = FLASK_SECRET_KEY
+
+# Check for Critical Tokens
+if not WHATSAPP_TOKEN:
+    print("FATAL: WHATSAPP_TOKEN environment variable is not set. API sending will fail.")
+
+# Database Configuration
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-# --- tokens (unchanged) ---
-WHATSAPP_TOKEN = "EAAcZAnpavCeMBPiY21eBWWWKECf1iYGPrZBi10KCOrWWYcWImxSd7WUVcfBVwG93lQd6D4uZCHViHTtsWYMpimQNZBDCulbeCs7gYIPjJRIkfzjNZASE4hrEHpuccsK0CnnIFagsnqO7UHFkZB30E2CXZCCpggZBEnwVOtM66eVy0BtNYBf94cyeeXxZAUmfyZAVMNJWCDoAgHAIOVpVLHIqR2kJAmbmUT8uG90kNZBrcGCgfURxAjoGNExtG3mdAZDZD"
-WHATSAPP_PHONE_NUMBER_ID = "835279482997616"
-WEBHOOK_VERIFY_TOKEN = "my_webhook_secret_123"
-
-# --- Models (unchanged fields, but we now store normalized phone numbers in phone_number) ---
+# --- Models ---
 class History(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     history_title = db.Column(db.String(255), nullable=False)
@@ -37,7 +43,7 @@ class History(db.Model):
 class MessageRecord(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     history_id = db.Column(db.Integer, db.ForeignKey('history.id'), nullable=False)
-    phone_number = db.Column(db.String(40), nullable=False)  # will store normalized digits only
+    phone_number = db.Column(db.String(40), nullable=False)
     status = db.Column(db.String(50), default='sent')
     delivered = db.Column(db.Boolean, default=False)
     seen = db.Column(db.Boolean, default=False)
@@ -79,44 +85,72 @@ def normalize_phone(s: str):
 
 def send_whatsapp_message(phone, title, body, img_url=None):
     """
-    Robust wrapper for WhatsApp API call. Returns parsed JSON on success,
-    or dict with 'error': {...} on failure so callers can inspect.
+    Sends the approved template 'orangetour_christmas' using language en_US.
+    If img_url is provided, it will be sent as the header image parameter.
+    Returns the parsed JSON on success or {'error': {...}} on failure.
     """
-    url = f"https://graph.facebook.com/v17.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    bold = f"*{title}*"
-    if img_url:
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": phone,
-            "type": "image",
-            "image": {"link": img_url, "caption": f"{bold}\n\n{body}"}
+    if not WHATSAPP_TOKEN:
+        return {"error": {"message": "Missing WHATSAPP_TOKEN env var"}}
+
+    TEMPLATE_NAME = "orangetour_christmas"
+    LANGUAGE_CODE = "en_US"   # match Business Manager: English (US)
+
+    url = f"https://graph.facebook.com/v22.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "template",
+        "template": {
+            "name": "orangetour_christmas",
+            "language": {"code": "en_US"}
         }
-    else:
-        payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": f"{bold}\n\n{body}"}}
+    }
+
+    # If your template expects a header image parameter, include it.
+    # If template header image is static in Business Manager and does NOT expect a parameter, DO NOT include this.
+    if img_url:
+        payload["template"]["components"] = [
+            {
+                "type": "header",
+                "parameters": [
+                    {
+                        "type": "image",
+                        "image": {"link": img_url}
+                    }
+                ]
+            }
+        ]
 
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=15)
+        r = requests.post(url, json=payload, headers=headers, timeout=20)
     except Exception as e:
         return {"error": {"message": f"Network error: {e}"}}
 
+    # Always try to parse JSON so we can surface exact API error text
     try:
-        j = r.json()
+        resp_json = r.json()
     except Exception:
-        # non-JSON response from API
-        return {"error": {"message": f"HTTP {r.status_code} - Non-JSON response"}}
+        return {"error": {"message": f"HTTP {r.status_code} - non-json response", "raw": r.text}}
 
-    # API-level failure (4xx/5xx) or explicit error structure
-    if r.status_code >= 400 or 'error' in j or j.get('errors'):
-        # try to return a friendly error message
-        err = j.get('error') or (j.get('errors') and j.get('errors')[0]) or {"message": f"HTTP {r.status_code}"}
-        return {"error": err}
+    # Debug logging to console (useful while developing)
+    if r.status_code >= 400 or 'error' in resp_json or resp_json.get('errors'):
+        print("WhatsApp API ERROR:", r.status_code, resp_json)   # check your console/logs
+        err = resp_json.get('error') or (resp_json.get('errors') and resp_json.get('errors')[0]) or {"message": f"HTTP {r.status_code}"}
+        return {"error": err, "raw_response": resp_json}
 
-    return j
+    # success
+    print("WhatsApp API OK:", resp_json)
+    return resp_json
+
 
 
 # -------------------------
-# PDF / Reporting
+# PDF / Reporting (unchanged)
 # -------------------------
 def generate_report_pdf(history):
     msgs = MessageRecord.query.filter_by(history_id=history.id).all()
@@ -175,7 +209,7 @@ def generate_report_pdf(history):
 
 
 # -------------------------
-# Routes
+# Routes (unchanged)
 # -------------------------
 @app.route('/', methods=['GET','POST'])
 def login():
@@ -246,7 +280,7 @@ def send():
 
     # Store normalized numbers in history (so refill works with valid numbers)
     hist = History(history_title=htitle, phone_numbers_csv=",".join(normalized_numbers),
-                   message_title=title, message_body=body, google_drive_link=img)
+                    message_title=title, message_body=body, google_drive_link=img)
     db.session.add(hist)
     db.session.commit()  # commit now so MessageRecord can reference hist.id
 
@@ -327,10 +361,10 @@ def refill(history_id):
     if not session.get('logged_in'): return redirect(url_for('login'))
     r = History.query.get_or_404(history_id)
     return jsonify(history_title=r.history_title,
-                   phone_numbers_csv=r.phone_numbers_csv,
-                   message_title=r.message_title,
-                   message_body=r.message_body,
-                   google_drive_link=r.google_drive_link)
+                    phone_numbers_csv=r.phone_numbers_csv,
+                    message_title=r.message_title,
+                    message_body=r.message_body,
+                    google_drive_link=r.google_drive_link)
 
 
 @app.route('/delete/<int:history_id>', methods=['DELETE'])

@@ -1,89 +1,303 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Bulk WhatsApp Sender</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8" />
+  <title>Bulk WhatsApp Sender</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    /* Inline enhancements for layout and spacing */
+    body {
+      background-color: #e5ddd5;
+      padding: 30px 10px 60px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      color: #333;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      background-color: #fff;
+      max-width: 900px;
+      width: 100%;
+      border-radius: 8px;
+      padding: 30px 40px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+    }
+    h1 {
+      color: #128C7E;
+      margin-bottom: 30px;
+      text-align: center;
+      font-weight: 600;
+      font-size: 2rem;
+    }
+    label {
+      display: block;
+      margin: 18px 0 6px 0;
+      font-weight: 600;
+      color: #555;
+    }
+    textarea, input[type="text"], input[type="file"] {
+      width: 100%;
+      padding: 12px 15px;
+      font-size: 1rem;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+      transition: border-color 0.3s ease;
+    }
+    textarea:focus, input[type="text"]:focus, input[type="file"]:focus {
+      outline: none;
+      border-color: #128C7E;
+    }
+    button[type="submit"] {
+      background-color: #25D366;
+      border: none;
+      color: white;
+      padding: 14px 28px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 1.1rem;
+      margin-top: 25px;
+      width: 100%;
+      transition: background-color 0.3s ease;
+    }
+    button[type="submit"]:hover {
+      background-color: #128C7E;
+    }
+    #status {
+      min-height: 80px;
+      max-height: 250px;
+      overflow-y: auto;
+      margin: 30px 0;
+      padding: 15px 20px;
+      background-color: #f0f0f0;
+      border-left: 5px solid #25D366;
+      border-radius: 6px;
+      font-size: 1rem;
+      color: #333;
+    }
+    .table-container {
+      overflow-x: auto;
+      margin-top: 40px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 1rem;
+    }
+    thead {
+      background-color: #128C7E;
+      color: white;
+    }
+    th, td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #eee;
+      text-align: left;
+      vertical-align: middle;
+    }
+    tr:hover {
+      background-color: #f9f9f9;
+    }
+    .actions-cell {
+      display: flex;
+      gap: 10px;
+    }
+    .action-btn {
+      padding: 8px 14px;
+      border-radius: 5px;
+      font-size: 1rem;
+      cursor: pointer;
+      font-weight: 700;
+      border: none;
+      color: white;
+      transition: background-color 0.3s ease;
+    }
+    .refillBtn {
+      background-color: #34B7F1;
+    }
+    .refillBtn:hover {
+      background-color: #0E8ECF;
+    }
+    .downloadBtn {
+      background-color: #FFA500;
+    }
+    .downloadBtn:hover {
+      background-color: #CC8400;
+    }
+    .deleteBtn {
+      background-color: #E53935;
+    }
+    .deleteBtn:hover {
+      background-color: #B02828;
+    }
+    .pagination {
+      margin-top: 25px;
+      text-align: center;
+      user-select: none;
+    }
+    .pagination button {
+      background-color: #25D366;
+      border: none;
+      color: white;
+      padding: 10px 16px;
+      margin: 0 8px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    .pagination button:disabled {
+      background-color: #bbb;
+      cursor: not-allowed;
+    }
+    .pagination button:hover:not(:disabled) {
+      background-color: #128C7E;
+    }
+    #pageInfo {
+      font-weight: 600;
+      font-size: 1rem;
+      color: #444;
+      margin-left: 12px;
+      vertical-align: middle;
+    }
+    /* Loading modal inline styles */
+    #loadingModal {
+      position: fixed;
+      top:0;left:0;right:0;bottom:0;
+      background: rgba(0,0,0,0.4);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    #loadingModal .modal-content {
+      background: #fff;
+      padding: 25px 40px;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      text-align: center;
+      font-weight: 600;
+      font-size: 1.1rem;
+      color: #28a745;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #loadingModal .loading-spinner {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 20px;
+      border: 5px solid #eee;
+      border-top: 5px solid #128C7E;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    @media (max-width: 600px) {
+      .container {
+        padding: 20px 15px;
+      }
+      button[type="submit"] {
+        padding: 12px;
+        font-size: 1rem;
+      }
+      .actions-cell {
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .action-btn {
+        font-size: 0.9rem;
+        padding: 6px 10px;
+      }
+      th, td {
+        padding: 10px 8px;
+        font-size: 0.9rem;
+      }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Bulk WhatsApp Sender</h1>
-        <form id="sendForm" enctype="multipart/form-data">
-            <label>Phone Numbers (CSV format or upload Excel):</label>
-            <textarea name="phone_numbers_csv" id="phone_numbers_csv" placeholder="1234567890,9876543210,..."></textarea><br>
-            <input type="file" name="excel_file" id="excel_file"><br>
-            <small>If Excel file is uploaded, it will override CSV above.</small><br>
+  <div class="container">
+    <h1>Bulk WhatsApp Sender</h1>
+    <form id="sendForm" enctype="multipart/form-data">
+      <label>Phone Numbers (CSV format or upload Excel):</label>
+      <textarea name="phone_numbers_csv" id="phone_numbers_csv" placeholder="1234567890,9876543210,..."></textarea><br />
+      <input type="file" name="excel_file" id="excel_file" /><br />
+      <small>If Excel file is uploaded, it will override CSV above.</small><br />
 
-            <label>Message Title:</label>
-            <input type="text" name="message_title" required><br>
+      <label>Message Title:</label>
+      <input type="text" name="message_title" required /><br />
 
-            <label>Message Body:</label>
-            <textarea name="message_body" required></textarea><br>
+      <label>Message Body:</label>
+      <textarea name="message_body" required></textarea><br />
 
-            <label>Google Drive Image Link:</label>
-            <input type="text" name="google_drive_link"><br>
+      <label>Google Drive Image Link:</label>
+      <input type="text" name="google_drive_link" /><br />
 
-            <label>History Title:</label>
-            <input type="text" name="history_title" required><br>
+      <label>History Title:</label>
+      <input type="text" name="history_title" required /><br />
 
-            <button type="submit">Send</button>
-        </form>
+      <button type="submit">Send</button>
+    </form>
 
-        <h2>Status</h2>
-        <div id="status"></div>
+    <h2>Status</h2>
+    <div id="status"></div>
 
-        <h2>History</h2>
-        <div class="table-container">
-            <table id="historyTable">
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>History Title</th>
-                        <th>Message Title</th>
-                        <th>Message Body</th>
-                        <th>Image Link</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="historyTableBody">
-                    {% for record in history %}
-                    <tr data-id="{{ record.id }}">
-                        <td>{{ record.id }}</td>
-                        <td>{{ record.history_title }}</td>
-                        <td>{{ record.message_title }}</td>
-                        <td class="message-body">{{ record.message_body[:100] }}{% if record.message_body|length > 100 %}...{% endif %}</td>
-                        <td>
-                            {% if record.google_drive_link %}
-                            <a href="{{ record.google_drive_link }}" target="_blank" class="view-link">View</a>
-                            {% else %}
-                            <span class="no-image">No Image</span>
-                            {% endif %}
-                        </td>
-                        <td class="actions-cell">
-                            <button type="button" class="refillBtn action-btn" data-id="{{ record.id }}" title="Refill Form">📝</button>
-                            <button type="button" class="downloadBtn action-btn" data-id="{{ record.id }}" title="Download Report">📊</button>
-                            <button type="button" class="deleteBtn action-btn delete" data-id="{{ record.id }}" title="Delete Record">🗑️</button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        
-        <div class="pagination">
-            <button id="prevPage">Previous</button>
-            <span id="pageInfo">Page 1</span>
-            <button id="nextPage">Next</button>
-        </div>
-
-        <!-- Loading indicator for report generation -->
-        <div id="loadingModal" class="modal" style="display: none;">
-            <div class="modal-content">
-                <div class="loading-spinner"></div>
-                <p>Generating report... Please wait.</p>
-            </div>
-        </div>
+    <h2>History</h2>
+    <div class="table-container">
+      <table id="historyTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>History Title</th>
+            <th>Message Title</th>
+            <th>Message Body</th>
+            <th>Image Link</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody">
+          {% for record in history %}
+          <tr data-id="{{ record.id }}">
+            <td>{{ record.id }}</td>
+            <td>{{ record.history_title }}</td>
+            <td>{{ record.message_title }}</td>
+            <td class="message-body">{{ record.message_body[:100] }}{% if record.message_body|length > 100 %}...{% endif %}</td>
+            <td>
+              {% if record.google_drive_link %}
+              <a href="{{ record.google_drive_link }}" target="_blank" class="view-link">View</a>
+              {% else %}
+              <span class="no-image">No Image</span>
+              {% endif %}
+            </td>
+            <td class="actions-cell">
+              <button type="button" class="refillBtn action-btn" data-id="{{ record.id }}" title="Refill Form">📝</button>
+              <a href="{{ url_for('report_page', history_id=record.id) }}" class="downloadBtn action-btn" title="View Report">📊</a>
+              <button type="button" class="deleteBtn action-btn delete" data-id="{{ record.id }}" title="Delete Record">🗑️</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-<script src="/static/script.js"></script>
+
+    <div class="pagination">
+      <button id="prevPage">Previous</button>
+      <span id="pageInfo">Page 1</span>
+      <button id="nextPage">Next</button>
+    </div>
+
+    <!-- Loading indicator for report generation -->
+    <div id="loadingModal" class="modal" style="display: none;">
+      <div class="modal-content">
+        <div class="loading-spinner"></div>
+        <p>Generating report... Please wait.</p>
+      </div>
+    </div>
+  </div>
+  <script src="/static/script.js"></script>
 </body>
 </html>
