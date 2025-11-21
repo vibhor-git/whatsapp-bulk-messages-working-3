@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, make_response
 from flask_sqlalchemy import SQLAlchemy
-import io, re, requests, os
+from flask_cors import CORS # 1. CORS library import kiya gaya
+import io, re, requests, os, csv
 from openpyxl import load_workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -18,6 +19,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "mysql+pymysql://root:vibhor1234@l
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+
+# 2. CORS ko apply kiya gaya
+CORS(app) 
 
 # Check for Critical Tokens
 if not WHATSAPP_TOKEN:
@@ -69,18 +73,72 @@ def convert_drive_link(link: str) -> str:
     return link
 
 
-def normalize_phone(s: str):
-    """Return digits-only phone number or None if invalid / too short."""
+def cell_to_str(value):
+    """
+    Convert Excel cell value to string digits in a robust way:
+    - If value is int -> str(int)
+    - If value is float (scientific notation) but whole -> cast to int then str
+    - Otherwise str(value)
+    """
+    if value is None:
+        return ''
+    # For numbers that excel stores as float (scientific notation)
+    if isinstance(value, float):
+        # if float is integer-like, convert to int to remove .0 and avoid scientific notation
+        if value.is_integer():
+            return str(int(value))
+        # else convert removing decimal point (phones shouldn't have decimals, but be safe)
+        return re.sub(r'\D', '', str(value))
+    if isinstance(value, int):
+        return str(value)
+    # if it's already a string, strip whitespace
+    return str(value).strip()
+
+
+def normalize_phone_raw(s: str):
+    """Strip non-digit prefixes and return digits-only or None."""
     if s is None:
         return None
     s = str(s).strip()
     if not s:
         return None
+    # remove leading + and leading 00, keep digits
+    s = re.sub(r'^\+','', s)
+    s = re.sub(r'^00','', s)
     cleaned = re.sub(r'\D', '', s)
-    # simple length check (allow 7-15 digits)
-    if len(cleaned) < 7:
+    if not cleaned:
         return None
     return cleaned
+
+
+def ensure_country_prefix(number_digits: str, country_code_digits: str):
+    """
+    REVISED LOGIC (V4): Handles the edge case where the phone number starts with the CC digit.
+    Ensures E.164 format (CC + Phone Number) unless the CC is already fully integrated.
+    """
+    if not number_digits or not country_code_digits:
+        # Agar number ya CC mein se koi bhi missing hai, toh number ko jaisa hai waise hi return kar dein.
+        return number_digits
+
+    # Agar number pehle hi Country Code se start ho raha hai aur uski length 11 ya 12 se zyada hai, toh woh theek hai.
+    if number_digits.startswith(country_code_digits) and len(number_digits) > 10:
+        return number_digits
+
+    # Jab CC aur Phone number dono ka pehla digit same ho (jaise 7 & 707...),
+    # aur phone number ki length 10 digits ho, toh humein CC forcefully prepend karna hoga
+    # kyunki yeh local number hi hai, jismein CC missing hai.
+    if len(number_digits) == 10 and number_digits.startswith(country_code_digits):
+        # Yeh 10-digit number mein CC missing hai. Prepend CC.
+        # Ex: CC='7', Num='7072155666' -> Output: 77072155666
+        return country_code_digits + number_digits
+
+    # Baaki sab cases mein: Agar number CC se start nahi hota ya length ka issue hai.
+    if not number_digits.startswith(country_code_digits):
+        # Agar start hi nahi hota, toh bas prepend kar do (Jaise 51 aur 44 ke liye)
+        return country_code_digits + number_digits
+    
+    # Final Fallback: Waise hi return kar dein
+    return number_digits
 
 
 def send_whatsapp_message(phone, title, body, img_url=None):
@@ -106,13 +164,12 @@ def send_whatsapp_message(phone, title, body, img_url=None):
         "to": phone,
         "type": "template",
         "template": {
-            "name": "orangetour_christmas",
-            "language": {"code": "en_US"}
+            "name": TEMPLATE_NAME,
+            "language": {"code": LANGUAGE_CODE}
         }
     }
 
     # If your template expects a header image parameter, include it.
-    # If template header image is static in Business Manager and does NOT expect a parameter, DO NOT include this.
     if img_url:
         payload["template"]["components"] = [
             {
@@ -140,13 +197,19 @@ def send_whatsapp_message(phone, title, body, img_url=None):
     # Debug logging to console (useful while developing)
     if r.status_code >= 400 or 'error' in resp_json or resp_json.get('errors'):
         print("WhatsApp API ERROR:", r.status_code, resp_json)   # check your console/logs
-        err = resp_json.get('error') or (resp_json.get('errors') and resp_json.get('errors')[0]) or {"message": f"HTTP {r.status_code}"}
-        return {"error": err, "raw_response": resp_json}
+        err = resp_json.get('error') or (resp_json.get('errors') and resp_json.get('errors')[0])
+        
+        # IMPROVED ERROR MESSAGE EXTRACTION
+        if err:
+            error_message = err.get('message') or str(err)
+        else:
+            error_message = f"HTTP {r.status_code} - Unknown API error. Raw response: {resp_json}"
+            
+        return {"error": {"message": error_message}, "raw_response": resp_json}
 
     # success
     print("WhatsApp API OK:", resp_json)
     return resp_json
-
 
 
 # -------------------------
@@ -209,7 +272,7 @@ def generate_report_pdf(history):
 
 
 # -------------------------
-# Routes (unchanged)
+# Routes 
 # -------------------------
 @app.route('/', methods=['GET','POST'])
 def login():
@@ -242,72 +305,180 @@ def send():
     if not session.get('logged_in'):
         return jsonify(status='error', message='Unauthorized'), 401
 
-    # Read CSV/text input
-    csv_data = request.form.get('phone_numbers_csv','').strip() or ''
-    # Excel file optional: collect first column values
+    # --- Collect phone numbers from multiple sources: text area CSV, uploaded CSV file, or Excel file ---
+    csv_text = request.form.get('phone_numbers_csv','').strip() or ''
+    normalized_numbers = []   # list of digit-only strings (phone part)
+    per_row_cc = []           # parallel list: country code from Excel row if present (digits) or None
+    skipped = []
+
+    # 1) If a CSV file uploaded via input named 'phone_csv' (recommended), parse it (single-column CSV expected)
+    if 'phone_csv' in request.files and request.files['phone_csv'].filename:
+        try:
+            raw = request.files['phone_csv'].read()
+            # try decode utf-8, fallback to latin-1
+            try:
+                text = raw.decode('utf-8')
+            except Exception:
+                text = raw.decode('latin-1')
+            reader = csv.reader(io.StringIO(text))
+            for row in reader:
+                for cell in row:
+                    cell = str(cell).strip()
+                    if not cell:
+                        continue
+                    cleaned = normalize_phone_raw(cell)
+                    if cleaned:
+                        normalized_numbers.append(cleaned)
+                        per_row_cc.append(None)
+                    else:
+                        skipped.append(cell)
+        except Exception as e:
+            return jsonify(status='error', message=f'Failed reading uploaded CSV: {e}'), 400
+
+    # 2) Excel file option — here we adapt to your provided format:
     if 'excel_file' in request.files and request.files['excel_file'].filename:
         try:
-            wb = load_workbook(io.BytesIO(request.files['excel_file'].read()))
-            excel_vals = [r[0] for r in wb.active.iter_rows(values_only=True) if r and r[0] is not None]
-            # join them into csv_data for further normalization
-            csv_data = csv_data + "\n" + "\n".join(str(x) for x in excel_vals) if csv_data else "\n".join(str(x) for x in excel_vals)
+            wb = load_workbook(io.BytesIO(request.files['excel_file'].read()), data_only=True)
+            ws = wb.active
+            for row in ws.iter_rows(values_only=True):
+                # Skip empty rows
+                if not any(cell is not None and str(cell).strip() != '' for cell in row):
+                    continue
+                # If row has at least two columns with values, interpret as [country_code, phone]
+                if len(row) >= 2 and row[0] is not None and row[1] is not None:
+                    raw_cc = cell_to_str(row[0])
+                    raw_phone = cell_to_str(row[1])
+                    cc_digits = re.sub(r'\D','', raw_cc) if raw_cc else None
+                    phone_digits = normalize_phone_raw(raw_phone)
+                    if phone_digits:
+                        normalized_numbers.append(phone_digits)
+                        per_row_cc.append(cc_digits if cc_digits else None)
+                    else:
+                        skipped.append(f"{raw_cc},{raw_phone}")
+                else:
+                    # single-column behaviour: take first non-empty cell as phone
+                    first = None
+                    for c in row:
+                        if c is not None and str(c).strip() != '':
+                            first = c
+                            break
+                    if first is None:
+                        continue
+                    val = cell_to_str(first)
+                    cleaned = normalize_phone_raw(val)
+                    if cleaned:
+                        normalized_numbers.append(cleaned)
+                        per_row_cc.append(None)
+                    else:
+                        skipped.append(str(first))
         except Exception as e:
             return jsonify(status='error', message=f'Failed reading excel file: {e}'), 400
 
-    # Split by common separators and normalize
-    raw_items = re.split(r'[,\n;]+', csv_data) if csv_data else []
-    normalized_numbers = []
-    skipped = []
-    for raw in raw_items:
-        if not raw:
-            continue
-        norm = normalize_phone(raw)
-        if norm:
-            normalized_numbers.append(norm)
-        else:
-            skipped.append(raw)
+    # 3) Also parse numbers entered in the text area (old behaviour preserved)
+    if csv_text:
+        raw_items = re.split(r'[,\n;]+', csv_text)
+        for raw in raw_items:
+            if not raw:
+                continue
+            cleaned = normalize_phone_raw(raw)
+            if cleaned:
+                normalized_numbers.append(cleaned)
+                per_row_cc.append(None)
+            else:
+                skipped.append(raw)
 
+    # Deduplicate while preserving order (we must dedupe both lists)
+    seen = set()
+    deduped_numbers = []
+    deduped_cc = []
+    for n, cc in zip(normalized_numbers, per_row_cc):
+        key = (n, cc or '')   # treat different cc as different entry
+        if key not in seen:
+            seen.add(key)
+            deduped_numbers.append(n)
+            deduped_cc.append(cc)
+    normalized_numbers = deduped_numbers
+    per_row_cc = deduped_cc
+
+    # Get form fields
     title = request.form.get('message_title','').strip()
     body = request.form.get('message_body','').strip()
     img = convert_drive_link(request.form.get('google_drive_link','').strip())
     htitle = request.form.get('history_title','').strip()
+    # default_country_code field ko front-end se lein
+    default_cc = request.form.get('default_country_code','').strip()   
 
-    if not (normalized_numbers and title and body and htitle):
-        # clearer error: if numbers are all invalid, explain that
-        if not normalized_numbers:
-            return jsonify(status='error', message='No valid phone numbers provided'), 400
-        return jsonify(status='error', message='All fields required'), 400
+    # Basic validation: need at least one number and history title
+    if not normalized_numbers:
+        return jsonify(status='error', message='No valid phone numbers provided'), 400
+    if not htitle:
+        return jsonify(status='error', message='History title required'), 400
+
+    # If default_cc provided, normalize to digits; otherwise keep None
+    default_cc_digits = re.sub(r'\D','', default_cc) if default_cc else None
+
+    # If some rows do not have cc and default_cc_digits missing, we must require default_cc
+    needs_default = any(cc is None for cc in per_row_cc)
+    if needs_default and not default_cc_digits:
+        return jsonify(status='error', message='Some rows do not include country code. Please provide default_country_code (e.g. 91 for India) in the form.'), 400
+
+    # Build final numbers: use per-row cc if present else default_cc_digits
+    final_numbers = []
+    for rawnum, row_cc in zip(normalized_numbers, per_row_cc):
+        cc_to_use = row_cc if row_cc else default_cc_digits
+        
+        # Validation for safety
+        if not cc_to_use:
+            # Agar koi CC available nahi hai, toh number ko jaisa hai waise hi rakhein.
+            rec_num = rawnum
+        else:
+            # Sahi prefixing logic apply karein for E.164 format (CC + Phone Digits)
+            rec_num = ensure_country_prefix(rawnum, cc_to_use)
+            
+        # Basic length check (allow 7-15 digits)
+        if rec_num is None or len(rec_num) < 7 or len(rec_num) > 15:
+            skipped.append(rawnum)
+            continue
+            
+        final_numbers.append(rec_num)
+
+    if not final_numbers:
+        return jsonify(status='error', message='No valid phone numbers after applying country codes'), 400
 
     # Store normalized numbers in history (so refill works with valid numbers)
-    hist = History(history_title=htitle, phone_numbers_csv=",".join(normalized_numbers),
-                    message_title=title, message_body=body, google_drive_link=img)
+    hist = History(history_title=htitle, phone_numbers_csv=",".join(final_numbers),
+                    message_title=title or '', message_body=body or '', google_drive_link=img or '')
     db.session.add(hist)
-    db.session.commit()  # commit now so MessageRecord can reference hist.id
+    db.session.commit()   # commit now so MessageRecord can reference hist.id
 
     res_list = []
-    for num in normalized_numbers:
+    for num in final_numbers:
         # create record first with normalized phone number
         rec = MessageRecord(history_id=hist.id, phone_number=num)
         db.session.add(rec)
-        db.session.flush()  # get rec.id if needed
+        db.session.flush()   # get rec.id if needed
 
         resp = send_whatsapp_message(num, title, body, img)
+        # store raw response in error_message for debugging (even on success)
+        try:
+            rec.whatsapp_message_id = resp.get('messages',[{}])[0].get('id') if isinstance(resp, dict) else None
+        except Exception:
+            rec.whatsapp_message_id = None
+
         if resp.get('error') or not resp.get('messages'):
             rec.status = 'failed'
             # extract message if possible
             err = resp.get('error')
             if isinstance(err, dict):
+                # IMPROVED ERROR MESSAGE EXTRACTION
                 rec.error_message = err.get('message') or str(err)
             else:
-                rec.error_message = str(err or 'Unknown error')
+                rec.error_message = str(resp.get('raw_response') or err or 'Unknown error')
             res_list.append(f"{num}: ❌ {rec.error_message}")
         else:
-            # success - store the message id returned by API
-            try:
-                rec.whatsapp_message_id = resp.get('messages',[{}])[0].get('id')
-            except Exception:
-                rec.whatsapp_message_id = None
             rec.status = 'sent'
+            # store full response for post-mortem (string)
+            rec.error_message = str(resp)
             res_list.append(f"{num}: ✅ Sent")
         # no commit here; we will commit after loop for efficiency
 
@@ -389,6 +560,14 @@ def whatsapp_webhook():
         return 'Verification failed', 403
 
     data = request.get_json()
+    # optional: save webhook payload for debugging
+    try:
+        with open('last_webhook.json','w') as f:
+            import json
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
     updated = False
     if not data:
         return 'OK', 200
@@ -406,7 +585,7 @@ def whatsapp_webhook():
                     if msg_id:
                         rec = MessageRecord.query.filter_by(whatsapp_message_id=msg_id).first()
                     if not rec and recipient:
-                        recip_norm = normalize_phone(recipient)
+                        recip_norm = normalize_phone_raw(recipient)
                         if recip_norm:
                             suffix = recip_norm[-8:]
                             rec = MessageRecord.query.filter(MessageRecord.phone_number.endswith(suffix)).order_by(MessageRecord.sent_at.desc()).first()
@@ -418,12 +597,15 @@ def whatsapp_webhook():
                             rec.delivered = True
                             rec.status = 'delivered'
                         elif st in ('read', 'seen'):
+                            # Delivered ko bhi true rakhein, kyunki read se pehle delivered hona zaroori hai
+                            rec.delivered = True 
                             rec.seen = True
                             rec.status = 'seen'
                         elif st == 'failed':
                             rec.status = 'failed'
                             # try to capture reason
-                            rec.error_message = status.get('error') or status.get('reason') or rec.error_message
+                            reason = status.get('error', {}).get('message') or status.get('reason')
+                            rec.error_message = reason or rec.error_message
                         else:
                             # other statuses like 'sent' - store for completeness
                             rec.status = st or rec.status
@@ -434,7 +616,7 @@ def whatsapp_webhook():
                     incoming_from = message.get('from') or message.get('sender') or message.get('wa_id')
                     if not incoming_from:
                         continue
-                    incoming_norm = normalize_phone(incoming_from)
+                    incoming_norm = normalize_phone_raw(incoming_from)
                     if not incoming_norm:
                         continue
                     # match by last N digits (8) to be robust against formatting differences
@@ -457,4 +639,6 @@ def whatsapp_webhook():
 
 
 if __name__=="__main__":
+    # Ensure you set the WHATSAPP_TOKEN environment variable 
+    # before running this application in production.
     app.run(debug=True)

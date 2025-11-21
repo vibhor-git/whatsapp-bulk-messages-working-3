@@ -1,0 +1,38 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "1432458354480971",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15551833198",
+              "phone_number_id": "835279482997616"
+            },
+            "statuses": [
+              {
+                "id": "wamid.HBgMOTE5NDExNzkxNDcwFQIAERgSMEVBNzUzNDZDNDI0M0JBNjg0AA==",
+                "status": "failed",
+                "timestamp": "1763170303",
+                "recipient_id": "919411791470",
+                "errors": [
+                  {
+                    "code": 131031,
+                    "title": "Business Account locked",
+                    "message": "Business Account locked",
+                    "error_data": {
+                      "details": "Business account has been locked."
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
